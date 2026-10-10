@@ -1,0 +1,170 @@
+# SmolVLM Ultrasound Report Generation Finetuning Config
+# All paths support {DRIVE_ROOT} interpolation for Colab.
+
+model_size: "256M"   # "256M" | "500M" | "2.2B"
+anatomy: "thyroid"     # "liver" | "breast" | "thyroid" | "all"
+dataset_format: "raw"  # "structured" | "raw"
+
+model:
+  architecture: "SmolVLM-{model_size}" # "SmolVLM-256M" | "SmolVLM-500M" | "SmolVLM-2.2B"
+  init_strategy: "biomedica"   # Initialization strategy: "biomedica" | "huggingface" | "random" | "ultrasound"
+
+  # Checkpoint paths 
+  # HuggingFaceTB/SmolVLM-256M-Instruct | HuggingFaceTB/SmolVLM-500M-Instruct | BIOMEDICA/BMC-smolvlm1-256M | path_to_ultrasound_checkpoint
+  checkpoints:
+    biomedica: "BIOMEDICA/BMC-smolvlm1-{model_size}"   
+    huggingface: "HuggingFaceTB/SmolVLM-{model_size}-Instruct"
+    random: "HuggingFaceTB/SmolVLM-{model_size}-Instruct"  # architecture only, weights randomised
+    ultrasound: "/us365k_pretrain/checkpoints/smolvlm-256M-US365K_c3adf76b"
+
+experiment:
+  name: "exp_{model.init_strategy}_smolvlm_{model_size}" 
+  description: "{model.init_strategy} checkpoint, raw report format, {model_size}"
+  output_dir: "{DRIVE_ROOT}/experiments/{experiment.name}"
+  seed: 42
+
+
+dataset:
+  format: "structured"   
+  # Instruction prompt shown to the model
+  instruction: >- 
+    You are a radiologist analyzing an ultrasound image focused on the {anatomy}.
+    Your task is to generate a concise and informative radiological report based strictly on the visual findings
+    within the provided image. Your report should describe the primary organ’s appearance (size, shape,
+    borders/capsule), its parenchymal echotexture (e.g., homogeneous, heterogeneous, echogenicity
+    relative to reference structures), and identify any visible abnormalities (e.g., masses, cysts, fluid
+    collections, calcifications, ductal dilation). Comment on relevant adjacent structures if visualized.
+    Use standard radiological terminology.
+    Note that the content will differ based on the visual findings in the image, but the structure of the report 
+    (ANATOMY, REPORT, EXAMINATION, PLANE TYPE or PROCEEDURE, FINDINGS, CLINICAL CONTEXT, NOTE) should be similar. 
+  suffix: "json"   # path suffix
+  train_path: "{DRIVE_ROOT}/data/{anatomy}_reports_train.{suffix}"
+  val_path:   "{DRIVE_ROOT}/data/{anatomy}_reports_val.{suffix}"
+  test_path:  "{DRIVE_ROOT}/data/{anatomy}_reports_test.{suffix}"   
+  image_dir:  "{DRIVE_ROOT}/data/{anatomy}"
+  source_note: "This report was generated from the {anatomy.capitalize()} Ultrasound Dataset."  # Dataset note appended to NOTE section
+  val_split: 0.2  # Split ratio (used only if val_json is absent / null)
+  max_images_per_sample: 2
+  group_images: false  # groups same-patient views into pairs
+                       # "false" = 1 image/sample, "pair" = 2 images/sample,
+                       # "true"  = all views/sample (grouped)
+
+csv_dataset:
+  format: "raw"  # "raw" (original annotations and our default)
+  # Instruction prompt shown to the model
+  instruction: >- 
+    You are a radiologist analyzing an ultrasound image focused on the {anatomy}.
+    Your task is to generate a concise and informative radiological report based strictly on the visual findings
+    within the provided image. Your report should describe the primary organ’s appearance (size, shape,
+    borders/capsule), its parenchymal echotexture (e.g., homogeneous, heterogeneous, echogenicity
+    relative to reference structures), and identify any visible abnormalities (e.g., masses, cysts, fluid
+    collections, calcifications, ductal dilation). Comment on relevant adjacent structures if visualized.
+    Use standard radiological terminology.
+    Output format: Strings, that is your report.
+  suffix: "csv"   # path suffix
+  train_path: "{DRIVE_ROOT}/data/{anatomy}_reports_train.{suffix}"
+  val_path:  "{DRIVE_ROOT}/data/{anatomy}_reports_val.{suffix}"
+  test_path:  "{DRIVE_ROOT}/data/{anatomy}_reports_test.{suffix}"   
+  image_dir:  "{DRIVE_ROOT}/data/{anatomy}"
+  source_note: "" 
+  val_split: 0.2 # Split ratio (used only if val_json is absent / null)
+  max_images_per_sample: 2
+  group_images: false  # groups same-patient views into pairs 
+                       # "false" = 1 image/sample, "pair" = 2 images/sample,
+                       # "true"  = all views/sample (grouped)
+peft:
+  enabled: true
+  mode: "lora"          # "lora" | "qlora" | "full" 
+
+
+  # 9-method per-component finetuning control (see models/loader.py).
+  # Set `method` to one of M1..M9 to auto-expand the components below, OR set
+  # `components` explicitly (components wins). Leave both unset to use `mode`.
+  #   M1 vision full   + LM full      M2 vision lora + LM lora
+  #   M3 vision full   + LM lora      M4 vision frozen   + LM lora
+  #   M5 vision lora   + LM frozen    M6 vision full   + LM frozen
+  #   M7 vision frozen + LM full      M8 vision lora   + LM full
+  #   M9 vision frozen + LM frozen
+  method: null           # e.g. "M2"; null falls back to `mode`
+  # components:           # explicit override (each: full | lora | frozen)
+  #   vision: "frozen"
+  #   language: "lora"
+  #   connector: "full"   # tiny module; trainable by default
+
+  lora:
+    r: 16  
+    lora_alpha: 32 
+    lora_dropout: 0.1 
+    bias: "none"
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "down_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "out_proj"      # vision self_attn output proj
+      - "fc1"           # vision mlp
+      - "fc2"           # vision mlp
+    task_type: "CAUSAL_LM"
+    use_dora: false    
+    init_lora_weights: "gaussian" 
+
+  qlora:
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "float16"
+    # bnb_4bit_compute_dtype=torch.bfloat16
+    bnb_4bit_use_double_quant: true
+
+training:
+  num_train_epochs: 4
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8 
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 0.5
+  label_smoothing_factor: 0.0  
+  dataloader_num_workers: 4  
+
+  precision: "bf16" # "fp16" for QLORA otherwise "bf16"
+  assistant_only_loss: true 
+  max_seq_length: null 
+
+  logging_steps: 10
+  eval_strategy: "steps"
+  eval_steps: 50
+  save_strategy: "steps"
+  save_steps: 50
+  save_total_limit: 2
+  load_best_model_at_end: false
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  optim: "adamw_torch_fused"  # adamw_torch
+  report_to: "clearml"    # "clearml" | "none"
+
+
+clearml:
+  project_name: "SmolVLM-US-Reports-Generation"
+  task_name: "{experiment.name}"   # interpolated at runtime
+  log_model: false           # set true to upload model artifacts to ClearML server
+
+checkpointing:
+  auto_resume: false # Auto-resume from the latest checkpoint in output_dir
+  drive_backup: true   # Additionally save to Google Drive on each checkpoint
+  drive_backup_dir: "{DRIVE_ROOT}/checkpoints/{experiment.name}"
+
+evaluation:
+  bertscore_model: "bert-base-multilingual-cased"
+  generation_samples: 0 # 0 = no in-training generation (fast). Set >0 to sample qualitatively.
+  max_new_tokens: 512
+  eval_batch_size: 4     # batched generation for val/test evaluation
+  eval_max_new_tokens: 160
+  compute_bleu: true
+  compute_rouge: true
+
+

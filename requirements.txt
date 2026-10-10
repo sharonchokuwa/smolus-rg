@@ -1,0 +1,21 @@
+transformers==4.57.6
+trl==1.14.2
+peft==0.15.2
+accelerate==1.15.0
+datasets==4.8.5
+bitsandbytes==0.50.2
+evaluate==0.4.6
+sacrebleu==2.6.0
+nltk==3.9.1
+bert-score==0.3.13
+pycocoevalcap==1.2
+pillow==11.3.0
+matplotlib==3.10.0
+PyYAML==6.0.3
+python-dotenv==1.2.3
+flatten-dict==0.5.0
+scikit-learn==1.6.1
+clearml==2.1.12
+rouge_score
+
+# torch==2.11.0+cu130 provided Colab runtime
